@@ -4,7 +4,7 @@ var mongoClient = mongo.MongoClient;
 var redis = require('redis');
 var crypto = require('crypto');
 var redisClient = redis.createClient();
-
+var async = require('async');
 function makeItem(req, res) {
   var shortname = (req.body.shortname || req.query.shortname);
 
@@ -183,20 +183,78 @@ function updateItem(req, res) {
 
 function findItem(req, res) {
   var namesToFind = (req.body.shortnames || req.query.shortnames);
+  var query = {};
   var response = {
     status: 'success'
   };
+  var items = new Array();
   var url = 'http://localhost:27017/accounts';
   myMongo.connect(url, function(err, db) {
     if (err) return next(err);
     var userdb = db.collection('items');
-    userdb.find( { $or: namesToFind } ).toArray( function(err, dbresult) { 
-      if(err) return next(err);
-      if(dbresult) {
-        response.items = dbresult;
+    var queryResult = new Array();
+    async.series( [ 
+      function(callback) {
+        if(namesToFind) {
+        
+          userdb.find( { "shortname": { $in: namesToFind } } ).toArray( function(err, dbresult) { 
+            if(err) return next(err);
+            queryResult = dbresult;
+            callback();
+          });
+        } else {
+          userdb.find( ).toArray( function( err, dbresult) {
+            if(err) return next(err);
+            queryResult = dbresult;
+            callback();
+          });
+        }
+      },
+      function(callback) {
+        if(namesToFind) {
+          for(var i = 0; i < namesToFind.length; ++i) {
+            items.push({});
+          }
+          
+          for(var i= 0; i < queryResult.length; ++i) {
+            var newEntry = {};
+            newEntry.id = queryResult[i]._id;
+            newEntry.shortname = queryResult[i].shortname;
+            newEntry.description = queryResult[i].description;
+            newEntry.isStackable = queryResult[i].isStackable;
+            newEntry.attributes = queryResult[i].attributes;
+            if(queryResult[i].name) {
+              newEntry.name = queryResult[i].name;
+            } else {
+              newEntry.name = queryResult[i].shortname;
+            }
+            for(var j = 0; j < namesToFind.length; ++j) {
+              if(namesToFind[j] == newEntry.shortname) {
+                items[j] = newEntry;
+              }
+            }
+          }
+        } else {
+          for(var i= 0; i < queryResult.length; ++i) {
+            var newEntry = {};
+            newEntry.id = queryResult[i]._id;
+            newEntry.shortname = queryResult[i].shortname;
+            newEntry.description = queryResult[i].description;
+            newEntry.isStackable = queryResult[i].isStackable;
+            newEntry.attributes = queryResult[i].attributes;
+            if(queryResult[i].name) {
+              newEntry.name = queryResult[i].name;
+            } else {
+              newEntry.name = queryResult[i].shortname;
+            }
+            items.push(newEntry);
+
+          }
+        }
+        response.items = items;
+        return res.send(JSON.stringify(response));
       }
-      return res.send(JSON.stringify(response));
-    });
+    ]);
   });
 
 }
@@ -206,12 +264,27 @@ function listItems(req, res) {
     status: 'success'
   };
   var url = 'http://localhost:27017/accounts';
+  var items = new Array();
   myMongo.connect(url, function(err, db) {
     if (err) return next(err);
     var itemdb = db.collection('items');
     itemdb.find().toArray( function(err, dbresult) { 
       if(err) return next(err);
-      response.items = dbresult;//can i just do this
+      var newEntry = {};
+      for(var i= 0; i < dbresult.length; ++i) {
+        newEntry.id = dbresult[i]._id;
+        newEntry.shortname = dbresult[i].shortname;
+        newEntry.description = dbresult[i].description;
+        newEntry.isStackable = dbresult[i].isStackable;
+        newEntry.attributes = dbresult[i].attributes;
+        if(dbresult[i].name) {
+          newEntry.name = dbresult[i].name;
+        } else {
+          newEntry.name = dbresult[i].shortname;
+        }
+        items.push(newEntry);
+      }
+      response.items = items;
       return res.send(JSON.stringify(response));
     });
   });
@@ -220,10 +293,15 @@ function listItems(req, res) {
 
 module.exports.register = function(app, root) {
   app.get(root + 'create', makeItem);
+  app.post(root + 'create', makeItem);
   app.get(root + ':id/get', getItem);
+  app.post(root + ':id/get', getItem);
   app.get(root + ':id/update', updateItem);
+  app.post(root + ':id/update', updateItem);
   app.get(root + 'find', findItem);
+  app.post(root + 'find', findItem);
   app.get(root + 'list', listItems);
+  app.post(root + 'list', listItems);
 }
 
 
