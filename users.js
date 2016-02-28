@@ -123,6 +123,7 @@ function updateUser(req, res) {
   if(id.charAt(0) === ':') {
     id = id.substr(1);
   }
+
   var targetID = "";
   var oldPassword = (req.body.oldPassword || req.query.oldPassword);
   var newPassword = (req.body.newPassword || req.query.newPassword);
@@ -132,7 +133,7 @@ function updateUser(req, res) {
   var session = (req.body._session || req.query._session);
   var token = (req.body._token || req.query._token);
   var targetID = id;
-  searchTargetID = new realmongo.ObjectID(id);
+  var searchTargetID = new realmongo.ObjectID(id);
   var ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
   
   var response = {
@@ -140,7 +141,6 @@ function updateUser(req, res) {
   };
   var data = {
   };
-  
   
   //since the whole thing require authentication
   if(session) {
@@ -153,21 +153,21 @@ function updateUser(req, res) {
         mongo.connect(url, function(err, db) {
           if (err) return next(err);
           var userdb = db.collection('users');
-          userdb.find({$or:[{_id: searchTargetID}, {username:currentUserName}]}).toArray(function(err, result) { 
+          userdb.find({$or:[{_id: searchTargetID}, {username:currentUserName}]}).toArray(function(err, foundUsers) { 
             if(err) return res.send(err);
-            var target;
-            var me;
-            if(targetID == result[0]._id) {
-              if(currentUserName == result[0].username) {
-                target = result[0];
-                me = result[0];
+            var target = null;
+            var me = null;
+            if(foundUsers.length > 1) {
+              if(targetID == foundUsers[0]._id) {
+                target = foundUsers[0];
+                me = foundUsers[1];
+              } else {
+                target = foundUsers[1];
+                me = foundUsers[0];
               }
-            } else if(targetID == result[0]._id) {
-              target = result[0];
-              me = result[1];
-            } else {
-              target = result[1];
-              me = result[0];
+            } else if (foundUsers.length == 1) {
+              target = foundUsers[0];
+              me = target;
             }
             if(result) {
               if(me.isAdmin || (me == target)) { 
@@ -183,7 +183,6 @@ function updateUser(req, res) {
                 }
                 if(newPassword) {
                   if((oldPassword == me.password) || me.isAdmin) {
-                    return res.send(me.password);
                     data.passwordChanged = true;
                   } else {
                     response.status = 'fail';
@@ -284,6 +283,7 @@ function loginUser(req, res) {
 function makeUser(req, res) {
   var username = (req.body.username || req.query.username); 
   var password = (req.body.password || req.query.password);
+  var avatar =   (req.body.avatar || req.query.avatar);
   //start pass thing
   var response = {
     status: 'success'
@@ -302,7 +302,7 @@ function makeUser(req, res) {
       if(err) return next(err);  
       if(!result) {
         //create the user
-        userdb.insertOne({ username: username, password: password }, function(err, result) {
+        userdb.insertOne({ username: username, password: password, avatar: avatar }, function(err, result) {
           if(err) { 
             return next(err);
           }
@@ -312,7 +312,7 @@ function makeUser(req, res) {
           res.send(JSON.stringify(response));
         });
       } else {
-        data.username = 'AlreadyTaken';
+        data.username = 'Already taken';
         response.reason = data;
         response.status = 'fail';
         res.send(JSON.stringify(response));
@@ -412,8 +412,6 @@ function listInventory(req, res) {
 
 function createInventory(req, res) {
   var id = req.params.userid;
-  return res.send(JSON.stringify(req.params));
-  return res.send(id)
   if(id.charAt(0) === ':') {
     id = id.substr(1);
   }
@@ -424,7 +422,6 @@ function createInventory(req, res) {
   var session = (req.body._session || req.query._session);
   var token = (req.body._token || req.query._token);
   var targetID = id;
-  return res.send(targetID);
   var searchTargetID = new realmongo.ObjectID(targetID);
 
   var ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
@@ -435,6 +432,101 @@ function createInventory(req, res) {
   var data = {
   };
   
+  //new
+  if(session) {
+    redisClient.hgetall(session, function(err, result) {
+      if(err) return next(err);
+      if(result && (result.authtoken == token)) {
+        var url = 'http://localhost:27017/accounts';
+        mongo.connect(url, function(err, db) {
+          if(err) return next(err);
+          var userdb = db.collection('users');
+          var itemdb = db.collection('items');
+          var inventorydb = db.collection('inventory');
+          userdb.findOne({username:session.username}, function(err, result) {
+            if(err) return next(err);
+            if(result) {
+              if(result.isAdmin) {
+                // the following two arrays represent the order
+                var viaID = new Array();
+                var viaShortname = new Array();
+                for(int i = 0; i < itemsToFind.length; ++i) {
+                  viaID.push(new realmongo.ObjectID(itemsToFind[i].itemid));
+                  viaShortname.push(itemsToFind[i].shortname);
+                }
+                var foundViaID = new Array();
+                var foundViaShortname = new Array();
+                var foundItems = new Array();
+                var inventoryQuery = new Array();
+                async.series([
+                  function(done) {//query for ids
+                    itemdb.find({_id: {$in : viaID}).toArray( function(err, foundItems) {
+                      if(err) return next(err);
+                      for(var i = 0; i < foundItems.length; ++i) {
+                        foundViaID.push(foundItems[i];
+                      }
+                      done();
+                    });
+                  },
+                  function(done) {//query for shortnames
+                    itemdb.find({shortname: {$in: viaShortname}}).toArray( function(err, foundItems) {
+                      if(err) return next(err);
+                      for(var i = 0; i < foundItems.length; ++i) {
+                        foundViaShortname.push(foundItems[i]);
+                      }
+                      done();
+                    });
+                  },
+                  function(done) {//more logic
+                    //check if the things we found 
+                    for(var i = 0; i < viaID.length; ++i) {
+                    //loop through via id and via shortname
+                    //find counterparts in found items
+                    //if they're the same item but dont match kill everything
+                      var shortItem;
+                      var idItem;
+                      for(var i = 0; i < foundViaID.length; ++i) {
+                        if(foundViaID._id == viaID[i]) {
+                          idItem = foundViaID;
+                          break;
+                        }
+                      }
+                      for(var i = 0; i < foundViaShortname.length; ++i) {
+                        if(foundViaShortname[i].shortname == viaShortname[i]) {
+                          shortItem = foundViaShortname[i];
+                          break;
+                        }
+                      }
+
+                      if(viaID[i] && viaShortname[i]) {
+                        if(idItem !== shortItem) { // blow up
+                          response.status = 'fail';
+                          response.reason = 'different identifiers id disparate items';
+                          return res.send(response);
+                        } else {
+                          foundItems.push(idItem);
+                        }
+                      } else if(idItem) {
+                        foundItems.push(idItem);
+                      } else {
+                        foundItems.push(shortItem);
+                      }
+                    }
+
+                  },
+                  function(done) {
+                  
+                  }
+                ]);
+              }
+            }
+          });
+        });
+      });
+    });
+  }
+
+
   
   //since the whole thing require authentication
   if(session) {
@@ -450,11 +542,11 @@ function createInventory(req, res) {
           var itemdb = db.collection('items');
           var inventorydb = db.collection('inventory');
           userdb.findOne({username:session.username}, function(err, result) { 
-            if(err) return res.send(err);
+            if(err) return next(err);
             if(result) {
               if(result.isAdmin) {
-                //first consolidate everything into a single array
                 var queryArray = new Array();
+                return res.send(itemsToFind);
                 for(var i = 0; i < itemsToFind.length; ++i) {
                   var insertdata = {
                   };
@@ -462,12 +554,13 @@ function createInventory(req, res) {
                     insertdata.shortname = itemsToFind[i].shortname;
                   }
                   if(itemsToFind[i].itemid) {
-                    insertdata.itemid = new mongo.ObjectID(itemsToFind[i].itemid);
+                    insertdata.itemid = new realmongo.ObjectID(itemsToFind[i].itemid);
                   }
                   queryArray.push(insertdata);
                 }
                 itemdb.find({$or:queryArray}).toArray( function(err, itemArray) {
                   if(err) return next(err);
+                  return res.send(JSON.stringify(queryArray));
                   for(var i = 0; i < itemArray.length; ++i) {
                     for(var j = 0; j < queryArray.length; ++j) {
                       if(itemArray[i].shortname == queryArray[j].shortname || itemArray[i]._id == queryArray[j]._id){
